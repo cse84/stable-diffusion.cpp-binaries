@@ -1,16 +1,17 @@
 #This version offers to reuse last prompt
 #this version can evaluate the contents of /home/deck/stable-diffusion.cpp/Checkpoints and prompt the user to select a checkpoint from that dir. logic to differentiate SD vs SDXL to be added
 #This version saves output files as . To change back to Output_#.png, set line 11 to base_filename="output" and 15 to while [[ -e "$output_dir/${base_filename}_${i}.png" ]]; do
-#This version will query the user for which LORA, if any, they want to use and the strength of the LORA. The script assumes LORAS are at /home/deck/stable-diffusion.cpp/LORAs/
+#This version will query the user for which LoRA, if any, to use and the strength of the LoRA. The script assumes LoRAs are at /home/deck/stable-diffusion.cpp/loras/
 #This version has the capability to specify a neg prompt and will ask if you want to reuse the previous one
 #This version will verify SD vs SDXL prompt/parameter compliance with the selected model. If noncompliant, will offer to attempt to automatically comply the prompt/parameters with the SDXL model
-#!/bin/bash
-
 #!/bin/bash
 
 # Directory to save images
 output_dir="output_images"
 mkdir -p "$output_dir"
+
+checkpoint_dir="/home/deck/stable-diffusion.cpp/checkpoints"
+lora_dir="/home/deck/stable-diffusion.cpp/loras"
 
 # Base filename
 base_filename="output"
@@ -48,19 +49,21 @@ list_checkpoints() {
 list_loras() {
     local dir=$1
     local files=("$dir"/*)
+    echo "${files}"
     echo "LoRAs found in $dir:"
     for idx in "${!files[@]}"; do
         echo "$((idx + 1))) ${files[$idx]##*/}"
     done
-    read -p "Please input the number corresponding to the LORA to be used in this generation: " choice
+    read -p "Please input the number corresponding to the LoRA to be used in this generation: " choice
     if [[ $choice -gt 0 && $choice -le ${#files[@]} ]]; then
         selected_lora="${files[$((choice - 1))]##*/}"
         echo "You've chosen: $choice) $selected_lora"
 
-        # Prompt the user to indicate the strength of the LORA
-        read -p "Enter the strength of the LORA (e.g., 1): " lora_strength
+        # Prompt the user to indicate the strength of the LoRA
+        read -p "Enter the strength of the LoRA (default 1): " lora_strength
+	lora_strength=${lora_strength:-1}
 
-        # Amend the user's prompt to include the selected LORA and its strength
+        # Amend the user's prompt to include the selected LoRA and its strength
         prompt="$prompt <lora:${selected_lora%.safetensors}:$lora_strength>"
     else
         echo "Invalid choice. Exiting."
@@ -69,20 +72,13 @@ list_loras() {
 }
 
 # List checkpoints and prompt the user to choose one
-checkpoint_dir="/home/deck/stable-diffusion.cpp/Checkpoints"
 list_checkpoints "$checkpoint_dir"
 
-# Change directory to Checkpoints to look for the model
-cd /home/deck/stable-diffusion.cpp/Checkpoints
-
 # Check if the selected checkpoint exists in the Checkpoints directory
-if [[ ! -f "$selected_checkpoint" ]]; then
-    echo "Model $selected_checkpoint not found in /home/deck/stable-diffusion.cpp/Checkpoints"
+if [[ ! -f "$checkpoint_dir/$selected_checkpoint" ]]; then
+    echo "Model $selected_checkpoint not found in $checkpoint_dir"
     exit 1
 fi
-
-# Return to the base working directory
-cd /home/deck/stable-diffusion.cpp/
 
 # Prompt the user for a new prompt or reuse the previous one
 if [[ -f "last_prompt.txt" ]]; then
@@ -116,13 +112,12 @@ else
     echo "$negative_prompt" > last_negative_prompt.txt
 fi
 
-# Prompt the user if they want to use a LORA for generating this image
-echo "Would you like to use a LORA for generating this image? (y/n)"
+# Prompt the user whether to use a LoRA for generating this image
+echo "Would you like to use a LoRA for generating this image? (y/n)"
 read use_lora
 
 if [[ "$use_lora" == "y" ]]; then
     # List LoRAs and prompt the user to choose one
-    lora_dir="/home/deck/stable-diffusion.cpp/LORAs"
     list_loras "$lora_dir"
 fi
 
@@ -163,6 +158,58 @@ case $resolution_choice in
         ;;
 esac
 
+read -p "Enter the CFG scale (default is 1): " cfg_scale
+cfg_scale=${cfg_scale:-1}
+
+echo "Choose a sampling method:"
+echo "1) euler"
+echo "2) euler_a"
+echo "3) heun"
+echo "4) dpm2"
+echo "5) dpm++2s_a"
+echo "6) dpm++2m"
+echo "7) dpm++2mv2"
+echo "8) ipndm"
+echo "9) ipndm_v"
+echo "10) lcm"
+read -p "Enter the number corresponding to your choice (default is lcm): " sampling_method_choice
+
+case $sampling_method_choice in
+    1)
+        sampling_method=euler
+        ;;
+    2)
+        sampling_method=euler_a
+        ;;
+    3)
+        sampling_method=heun
+        ;;
+    4)
+        sampling_method=dpm2
+        ;;
+    5)
+        sampling_method=dpm++2s_a
+        ;;
+    6)
+        sampling_method=dpm++2m
+        ;;
+    7)
+        sampling_method=dpm++2mv2
+        ;;
+    8)
+        sampling_method=ipndm
+        ;;
+    9)
+        sampling_method=ipndm_v
+        ;;
+    10)
+        sampling_method=lcm
+        ;;
+    *)
+        sampling_method=lcm
+        ;;
+esac
+
 # Prompt the user to specify the number of steps (default to 8)
 read -p "Enter the number of steps (default is 8): " steps
 steps=${steps:-8}
@@ -170,9 +217,9 @@ steps=${steps:-8}
 # Prompt the user to enter the number of pictures to generate
 read -p "Enter the number of pictures to generate: " num_pictures
 
-# Check if model is SDXL and warn user if true, ask if they want automatic adjustment for SDXL compliance
-if [[ "$selected_checkpoint" == *"SDXL"* ]]; then
-    echo "WARNING: The model being used is SDXL."
+# Check if model is SDXL and warn user if true, ask if automatic adjustment for SDXL compliance wanted
+if [[ "$(stat -L -c %s "$checkpoint_dir/$selected_checkpoint")" > 2500000000 ]]; then
+    echo "WARNING: You seem to be using an SDXL model."
     read -p "Would you like your prompt automatically adjusted for SDXL compliance? (y/n): " adjust_sdxl
     if [[ "$adjust_sdxl" == "y" ]]; then
         sdxl_compliance="--vae-on-cpu"
@@ -194,7 +241,7 @@ for ((j=1; j<=num_pictures; j++)); do
     output_filename="${safe_prompt}-${safe_checkpoint}_${i}.png"
 
     # Run the stable-diffusion command with the new filename and random seed, using the selected checkpoint from Checkpoints directory
-    ./sd -m "/home/deck/stable-diffusion.cpp/Checkpoints/$selected_checkpoint" -H "$height" -W "$width"  --vae-on-cpu --sampling-method lcm --steps "$steps" --cfg-scale 1 --seed "$seed" --prompt "$prompt" --negative-prompt "$negative_prompt" $sdxl_compliance -o "$output_dir/$output_filename"
+    ./sd -m "$checkpoint_dir/$selected_checkpoint" -H "$height" -W "$width" --sampling-method lcm --steps "$steps" --cfg-scale "$cfg_scale" --seed "$seed" --prompt "$prompt" --negative-prompt "$negative_prompt" $sdxl_compliance -o "$output_dir/$output_filename" | tee output.log
 
     # Check for memory allocation error
     if grep -q "ErrorOutOfDeviceMemory" <<< "$(tail -n 10 output.log)"; then
@@ -210,7 +257,7 @@ done
 
 # create dir with
 #cd /home/deck/stable-diffusion.cpp/
-#chmod +x imgen.sh
+#chmod +x imagen.sh
 
 #run this script to generate multiple images in 1 command
-#./imgen
+#./imagen.sh
